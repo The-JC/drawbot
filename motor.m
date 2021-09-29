@@ -1,14 +1,16 @@
-classdef motor
+classdef motor < handle
     %MOTOR Summary of this class goes here
     %   Detailed explanation goes here
     properties(Constant)
         CALIBRATION_POWER = 30
         CALIBRATION_TIMEOUT = 25
+        PEN_MOTOR_POWER = 20
+        PEN_MOTOR_VALUE = 90
         MOTOR_1_DIR = 0
         MOTOR_2_DIR = 1
         COORDINATES_GEAR_A = [0, 0]
         COORDINATES_GEAR_B = [6, 0]
-        RADIUS_ARM_1 = 16+1.3125
+        RADIUS_ARM_1 = 16 +1.3125
         RADIUS_ARM_2 = 11
     end
     
@@ -20,6 +22,7 @@ classdef motor
         limit2
         mAPos
         mBPos
+        penDown
     end
     
     methods
@@ -34,6 +37,7 @@ classdef motor
             
             obj.mAPos = 0;
             obj.mBPos = 0;
+            obj.penDown = 1;
             
         end
         
@@ -107,13 +111,15 @@ classdef motor
             end
         end
         
-        function start(obj, motor_label, power, limitValue, speedRegulation)
+        function start(obj, motor_label, power, limitValue, speedRegulation, smoothStart, smoothStop)
             arguments
                 obj motor;
                 motor_label char;
                 power double;
                 limitValue double {isnumeric} = 0;
                 speedRegulation double {isnumeric} = 0;
+                smoothStart double {isnumeric} = 0;
+                smoothStop double {isnumeric} = 0;
             end
             % Sets power level of speciefied motor with respect to the
             % turning direction
@@ -122,6 +128,8 @@ classdef motor
                 case 'A'
                     obj.mA.limitValue = abs(limitValue);
                     obj.mA.speedRegulation = speedRegulation;
+                    obj.mA.smoothStart = smoothStart;
+                    obj.mA.smoothStop = smoothStop;
                     obj.mA.power = power;
                     if ~obj.mA.isRunning
                         obj.mA.start;
@@ -129,12 +137,42 @@ classdef motor
                 case 'B'
                     obj.mB.limitValue = abs(limitValue);
                     obj.mB.speedRegulation = speedRegulation;
+                    obj.mB.smoothStart = smoothStart;
+                    obj.mB.smoothStop = smoothStop;
                     obj.mB.power = power;
                     if ~obj.mB.isRunning
                         obj.mB.start;
                     end
             end
         end
+        
+        function obj = lowerPen(obj, lowerPen)
+            %LOWERPEN Summary of this function goes here
+            %   Detailed explanation goes here
+            
+            if lowerPen == obj.penDown
+                return
+            end
+            
+            m = obj.brickObj.motorA;
+            m.speedRegulation = true;
+            m.limitMode = 'Tacho';
+            m.brakeMode = 'Brake';
+            m.limitValue = motor.PEN_MOTOR_VALUE;
+            m.resetTachoCount;
+
+            if(lowerPen)
+                obj.penDown = 1;
+                m.power = motor.PEN_MOTOR_POWER;
+            else
+                obj.penDown = 0;
+                m.power = -motor.PEN_MOTOR_POWER;
+            end
+
+            m.start;
+            m.waitFor;
+
+            end
         
         function c = setSpeedToCoordinates(obj, x, max_speed ,init, brake)
             arguments
@@ -190,69 +228,145 @@ classdef motor
             c=1;
         end
         
-        function [v_speed] = calculateSpeed(obj, x, max_speed, init, brake)
+        function [v_speed] = calculateSpeed(obj, x, max_speed, brake)
             arguments
                 obj(1,1) motor;
                 x(1,2) double;
                 max_speed(1,1) double;
-                init(1, 2) double = [inf, inf];
                 brake(1,1) double = 0;
-            end
+            end  
             
-            % Get current position of pen
             current_position = [obj.mB.tachoCount, obj.mA.tachoCount];
-            current_coordinates = motor.motorposToCoordinates(current_position(1), current_position(2));
-            distance = norm(current_coordinates - x);  
-            
-            [new_pos_B, new_pos_A] = motor.coordinatesToMotorpos(next);
+            [new_pos_B, new_pos_A] = motor.coordinatesToMotorpos(x);
             distance_position = [new_pos_B - current_position(1), new_pos_A - current_position(2)];
             
-            if abs(distance_position(1)) > abs(distance_position(2))
-                v_speed = [speed, abs( speed / distance_position(2) * distance_position(1) )];
-            else
-                v_speed = [abs( speed / distance_position(2) * distance_position(1) ), speed];
-            end
+            nor = norm(double(distance_position));
+           
+            v_speed = max_speed* [abs(double(distance_position(1))/nor), abs(double(distance_position(2))/nor)];
+%             if abs(distance_position(1)) > abs(distance_position(2))
+%                 v_speed = [speed, abs( speed * distance_position(1) / distance_position(2) )];
+%             else
+%                 v_speed = [abs( ( speed * distance_position(1)) / distance_position(2) ), speed];
+%             end
+            
+            v_speed(v_speed > 100) = 100;
+            v_speed(v_speed < 10) = 10;
             
         end
         
-        function gotoPoint(obj, x, brake, last, max_speed)
+        function gotoPoint(obj, x, brake, max_speed)
             arguments
                 obj motor;
                 x(2, 1) double;
                 brake double = 1;
-                last(2,1) double = [NaN, NaN];
                 max_speed double = 30;
             end
             
-            if isnan(last(1)) || isnan(last(2))
-                init_pos = [obj.mB.tachoCount, obj.mA.tachoCount];
-                init_coord = motor.motorposToCoordinates(init_pos(1), init_pos(2));
-            else
-                init_coord = last;
+            % Get current position of pen
+            
+            initial_position = [obj.mB.tachoCount, obj.mA.tachoCount];
+            initial_coordinates = motor.motorposToCoordinates(initial_position(1), initial_position(2));
+            distance = norm(initial_coordinates - x);
+            
+            d = x' - initial_coordinates;
+            
+            for index = 0:0.1:1
+                
+                current_position = [obj.mB.tachoCount, obj.mA.tachoCount];
+                current_coordinates = motor.motorposToCoordinates(current_position(1), current_position(2));
+                dif = initial_coordinates - current_coordinates;
+            
+                [new_posB, new_posA] = motor.coordinatesToMotorpos(initial_coordinates + d * index);
+                new_posB = new_posB - current_position(1);
+                new_posA = new_posA - current_position(2);
+
+                v_speed = obj.calculateSpeed(x, max_speed, brake);
+                smooth = 0;
+                if  abs(new_posB) > 5
+                    obj.mB.brakeMode = 'Brake';
+                    obj.start('B', v_speed(1)*sign(new_posB), new_posB, 1, smooth, smooth);
+                end
+                if abs(new_posA) > 5
+                    obj.mA.brakeMode = 'Brake';
+                    obj.start('A', v_speed(2)*sign(new_posA), new_posA, 1, smooth, smooth);
+                end
+
+%                 if abs(new_posB - current_position(1)) > 25
+%                     obj.mB.waitFor;
+%                 end
+%                 if abs(new_posA - current_position(2)) > 25
+%                     obj.mA.waitFor;
+%                 end
+                
+
+                while obj.mB.isRunning || obj.mA.isRunning
+%                     current_position = [obj.mB.tachoCount, obj.mA.tachoCount];
+%                     current_coordinates = motor.motorposToCoordinates(current_position(1), current_position(2));
+%                     dif = x' - current_coordinates
+%                     disp([obj.mB.tachoCount, obj.mA.tachoCount, v_speed(1)*sign(new_posB), v_speed(2)*sign(new_posA)])
+                end
+                
             end
             
-            max_speed_ = 5;
-            while obj.setSpeedToCoordinates(x, max_speed_, init_coord, brake)
-                toc
-                tic;
-                max_speed_ = max_speed_ + 5;
-                if max_speed_ >= max_speed
-                    max_speed_ = max_speed;
+        end
+        
+        function followPath(obj, points, max_speed)
+            arguments
+                obj motor;
+                points(:,3) double;
+                max_speed double = 50;
+            end
+            
+            for i = 1:length(points)
+                point = points(i,:);
+                
+                obj.lowerPen(point(3));
+                
+                x = point(1:2);
+                
+                obj.gotoPoint(x, 1, max_speed);
+                              
+            end         
+            
+        end
+        
+        function new_points = fitPath(obj, points)
+            [bbox_min, bbox_size] = motor.getBoundingBox(points);
+            [left_top, left_bottom] = motor.getCircles(obj.RADIUS_ARM_1 -1, obj.RADIUS_ARM_2, obj.COORDINATES_GEAR_A, obj.COORDINATES_GEAR_B);
+            
+            min_x = max([left_top(1) - left_top(3), left_bottom(1) - left_bottom(3)]);
+            
+            best_fit = 10000;
+            best_fit_x = 0;
+            best_fit_y = 0;
+            best_scale = 0;
+            mx = (obj.COORDINATES_GEAR_A(1) + obj.COORDINATES_GEAR_B(1)) /2;
+            
+            for x = min_x:0.5:mx
+                y1 = motor.getYCircle(left_top, x)-1;
+                y2 = motor.getYCircle(left_bottom, x)-1;
+                
+                if ~isnan(y1) && ~isnan(y2)
+                    if y1 > y2
+                        if  abs( ( (mx-x)*2 )/( y1-y2 ) - ( bbox_size(1)/bbox_size(2) ) ) < best_fit
+                            best_fit = abs((mx-x)*2)/(y1-y2) - (bbox_size(1)/bbox_size(2));
+                            best_fit_x = x;
+                            best_fit_y = y2;
+                            best_scale = (mx-x)*2 / bbox_size(1);
+                        end
+                    end
                 end
             end
             
-            if brake == 1
-                obj.mA.brakeMode = 'Brake';
-                obj.mB.brakeMode = 'Brake';
-                obj.mA.stop;
-                obj.mB.stop;
-            else
-                obj.mA.brakeMode = 'Coast';
-                obj.mB.brakeMode = 'Coast';
-                obj.mA.stop;
-                obj.mB.stop;
+            new_points = [[],[],[]];
+            for i = 1:length(points)
+                new_points(i,1) = (points(i,1)-bbox_min(1))*best_scale + best_fit_x;
+                new_points(i,2) = (points(i,2)-bbox_min(2))*best_scale + best_fit_y;
+                new_points(i,3) = points(i,3);
             end
+            
         end
+        
     end
     
     methods (Static)
@@ -348,7 +462,52 @@ classdef motor
             cos_abc = (ab^2 + bc^2 - ac^2) / (2*ab*bc);
             alpha = 180 - ( 360 * acos(cos_abc) / (2*pi) );
         end
-     
+        
+        function [min_p, size] = getBoundingBox(points)
+            min_x = min(points(:,1));
+            max_x = max(points(:,1));
+            min_y = min(points(:,2));
+            max_y = max(points(:,2));
+            
+            min_p = [min_x, min_y];
+            size = [max_x-min_x, max_y-min_y];
+        end
+        
+        function [x] = quad_solve(a, b, c)
+            d = b^2-4*a*c;
+            if d < 0
+                x = NaN
+                return
+            elseif d == 0
+                x = (-b + sqrt(d))/(2*a)
+            else
+                x1 = (-b + sqrt(d))/(2*a);
+                x2 = (-b - sqrt(d))/(2*a);
+                x = max([x1, x2]);
+            end
+        end
+        
+        function x = getYCircle(circle, x)
+            xC = circle(1);
+            yC = circle(2);
+            rC = circle(3);
+            a = 1;
+            b = -2 * yC;
+            c = -2*xC*x + yC^2 - rC^2 + x^2 + xC^2;
+            x = motor.quad_solve (a,b,c);
+        end
+        
+        function pos = pointPos(x, d, theta)
+            theta_rad = theta * 2*pi / 360;
+            pos = [x(1) + d*cos(theta_rad), x(2) + d*sin(theta_rad)];
+        end
+        
+        function [left_top, left_bottom] = getCircles(r1, r2, A, B)
+            angle_min = 16;
+            left_top = [B(1), B(2), r1+r2];
+            pos = motor.pointPos(A, r2, 180-angle_min);
+            left_bottom = [pos(1), pos(2), r1];
+        end
     end
 end
 
