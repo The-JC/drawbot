@@ -147,8 +147,7 @@ classdef motor < handle
         end
         
         function obj = lowerPen(obj, lowerPen)
-            %LOWERPEN Summary of this function goes here
-            %   Detailed explanation goes here
+            %LOWERPEN drives the motor responsible for lifting the pen
             
             if lowerPen == obj.penDown
                 return
@@ -174,61 +173,8 @@ classdef motor < handle
 
             end
         
-        function c = setSpeedToCoordinates(obj, x, max_speed ,init, brake)
-            arguments
-                obj(1,1) motor;
-                x(1,2) double;
-                max_speed(1,1) double;
-                init(1, 2) double = [inf, inf];
-                brake(1,1) double = 0;
-            end
-            
-            c=0;
-            
-            % Get current position of pen
-            current_position = [obj.mB.tachoCount, obj.mA.tachoCount];
-            current_coordinates = motor.motorposToCoordinates(current_position(1), current_position(2));
-            distance = norm(current_coordinates - x);    
-            
-            % Check if limit is exceded
-            if ~init(1)==inf && ~init(2)==inf
-                too_far = ( 180 - motor.getAngle(init, x, current_coordinates ) ) >= 90;
-            else
-                too_far = false;
-            end
-            if too_far || (distance < 0.1 && brake < 1 ) || distance < 0.05
-                return
-            end
-            
-            next = current_coordinates + ( x - current_coordinates ) / ( distance * 100 );
-            
-            [next_pos_B, next_pos_A] = motor.coordinatesToMotorpos(next);
-            distance_position = [next_pos_B - current_position(1), next_pos_A - current_position(2)];
-            
-            speed = max_speed;
-            slow_down_distance = ( max_speed / 20 );
-            if distance < slow_down_distance
-                speed = speed - (slow_down_distance - distance)/slow_down_distance * (brake * (max_speed-20));
-            end
-            
-            
-            if abs(distance_position(1)) > abs(distance_position(2))
-                v_speed = [speed, abs( speed / distance_position(2) * distance_position(1) )];
-            else
-                v_speed = [abs( speed / distance_position(2) * distance_position(1) ), speed];
-            end
-            
-            v_speed(v_speed > 100) = 100;
-            
-%              disp([" X: ", current_coordinates(1), " Y: ", current_coordinates(2), " TachoCount (B,A)=",current_position," d=", distance, " Speed-B:", v_speed(1) * sign(distance_position(1)), " Speed-A:", v_speed(2) * sign(distance_position(2))]);
-            
-            obj.start('B', v_speed(1) * sign(distance_position(1)), 0, 1);
-            obj.start('A', v_speed(2) * sign(distance_position(2)), 0, 1);
-            
-            c=1;
-        end
-        
         function [v_speed] = calculateSpeed(obj, x, max_speed, brake)
+            % calculates the power vector needed to drive both motors to keep the pen on its trajectory
             arguments
                 obj(1,1) motor;
                 x(1,2) double;
@@ -239,9 +185,10 @@ classdef motor < handle
             current_position = [obj.mB.tachoCount, obj.mA.tachoCount];
             [new_pos_B, new_pos_A] = motor.coordinatesToMotorpos(x);
             distance_position = [new_pos_B - current_position(1), new_pos_A - current_position(2)];
-            
+             
             nor = norm(double(distance_position));
            
+            % Calculate speed proportional to distnace left
             v_speed = max_speed* [abs(double(distance_position(1))/nor), abs(double(distance_position(2))/nor)];
 %             if abs(distance_position(1)) > abs(distance_position(2))
 %                 v_speed = [speed, abs( speed * distance_position(1) / distance_position(2) )];
@@ -249,12 +196,14 @@ classdef motor < handle
 %                 v_speed = [abs( ( speed * distance_position(1)) / distance_position(2) ), speed];
 %             end
             
+            % Limit the speeds
             v_speed(v_speed > 100) = 100;
             v_speed(v_speed < 10) = 10;
             
         end
         
         function gotoPoint(obj, x, brake, max_speed)
+            % Drives the tip from one point to another
             arguments
                 obj motor;
                 x(2, 1) double;
@@ -262,12 +211,12 @@ classdef motor < handle
                 max_speed double = 30;
             end
             
-            % Get current position of pen
-            
+            % Get initial position of pen
             initial_position = [obj.mB.tachoCount, obj.mA.tachoCount];
             initial_coordinates = motor.motorposToCoordinates(initial_position(1), initial_position(2));
             distance = norm(initial_coordinates - x);
             
+            % component vise diffrence of the initial coordinate to the target coordinate
             d = x' - initial_coordinates;
             
             for index = 0:0.1:1
@@ -275,7 +224,8 @@ classdef motor < handle
                 current_position = [obj.mB.tachoCount, obj.mA.tachoCount];
                 current_coordinates = motor.motorposToCoordinates(current_position(1), current_position(2));
                 dif = initial_coordinates - current_coordinates;
-            
+                
+                % Calculate the new motor position to be along the trajectory from the initial point to x
                 [new_posB, new_posA] = motor.coordinatesToMotorpos(initial_coordinates + d * index);
                 new_posB = new_posB - current_position(1);
                 new_posA = new_posA - current_position(2);
@@ -298,19 +248,19 @@ classdef motor < handle
 %                     obj.mA.waitFor;
 %                 end
                 
-
+                
+                % Wait until both motors finished their movements
                 while obj.mB.isRunning || obj.mA.isRunning
 %                     current_position = [obj.mB.tachoCount, obj.mA.tachoCount];
 %                     current_coordinates = motor.motorposToCoordinates(current_position(1), current_position(2));
 %                     dif = x' - current_coordinates
 %                     disp([obj.mB.tachoCount, obj.mA.tachoCount, v_speed(1)*sign(new_posB), v_speed(2)*sign(new_posA)])
                 end
-                
             end
-            
         end
         
         function followPath(obj, points, max_speed)
+            % Lets the pen follow a list of points each row is in the format of (x, y, penDown?)
             arguments
                 obj motor;
                 points(:,3) double;
@@ -331,6 +281,7 @@ classdef motor < handle
         end
         
         function new_points = fitPath(obj, points)
+            % Fits a path to the boundaries of our robot
             [bbox_min, bbox_size] = motor.getBoundingBox(points);
             [left_top, left_bottom] = motor.getCircles(obj.RADIUS_ARM_1 -1, obj.RADIUS_ARM_2, obj.COORDINATES_GEAR_A, obj.COORDINATES_GEAR_B);
             
@@ -340,6 +291,7 @@ classdef motor < handle
             best_fit_x = 0;
             best_fit_y = 0;
             best_scale = 0;
+            % Center of the robot
             mx = (obj.COORDINATES_GEAR_A(1) + obj.COORDINATES_GEAR_B(1)) /2;
             
             for x = min_x:0.5:mx
@@ -464,6 +416,7 @@ classdef motor < handle
         end
         
         function [min_p, size] = getBoundingBox(points)
+            % Returns the bounding box of a list of points
             min_x = min(points(:,1));
             max_x = max(points(:,1));
             min_y = min(points(:,2));
@@ -474,11 +427,14 @@ classdef motor < handle
         end
         
         function [x] = quad_solve(a, b, c)
+            % Solve a quadratic equatien given by a*x^2 + b*x + c = 0
             d = b^2-4*a*c;
             if d < 0
+                % Only imaginery solutions
                 x = NaN
                 return
             elseif d == 0
+                % Ther's only one solution of multiplicity two
                 x = (-b + sqrt(d))/(2*a)
             else
                 x1 = (-b + sqrt(d))/(2*a);
@@ -498,6 +454,7 @@ classdef motor < handle
         end
         
         function pos = pointPos(x, d, theta)
+            % Calculates the coordinates of a point on a circle with angle theta
             theta_rad = theta * 2*pi / 360;
             pos = [x(1) + d*cos(theta_rad), x(2) + d*sin(theta_rad)];
         end
