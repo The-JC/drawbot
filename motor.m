@@ -232,7 +232,14 @@ classdef motor
             end
             
             max_speed_ = 5;
-            
+            while obj.setSpeedToCoordinates(x, max_speed_, init_coord, brake)
+                toc
+                tic;
+                max_speed_ = max_speed_ + 5;
+                if max_speed_ >= max_speed
+                    max_speed_ = max_speed;
+                end
+            end
             
             if brake == 1
                 obj.mA.brakeMode = 'Brake';
