@@ -219,7 +219,7 @@ classdef motor < handle
             % component vise diffrence of the initial coordinate to the target coordinate
             d = x' - initial_coordinates;
             
-            for index = 0:0.02:1
+            for index = 0:0.25:1
                 
                 current_position = [obj.mB.tachoCount, obj.mA.tachoCount];
                 current_coordinates = motor.motorposToCoordinates(current_position(1), current_position(2));
@@ -232,11 +232,11 @@ classdef motor < handle
 
                 v_speed = obj.calculateSpeed(x, max_speed, brake);
                 smooth = 0;
-                if  abs(new_posB) > 15
+                if  abs(new_posB) > 15 && v_speed(1) > 0
                     obj.mB.brakeMode = 'Brake';
                     obj.start('B', v_speed(1)*sign(new_posB), new_posB, 1, smooth, smooth);
                 end
-                if abs(new_posA) > 15
+                if abs(new_posA) > 15  && v_speed(1) > 0
                     obj.mA.brakeMode = 'Brake';
                     obj.start('A', v_speed(2)*sign(new_posA), new_posA, 1, smooth, smooth);
                 end

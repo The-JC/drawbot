@@ -23,7 +23,7 @@ try
 %     end
 %     p_sin(1,3) = 0;
 
-      p_sin = importsvg('bird.svg')
+      p_sin = importsvg('tree3.svg')
     
       p_sin = m.fitPath(p_sin);
 %       m.gotoPoint([0,22], 1, 30);
